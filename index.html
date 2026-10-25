@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b5cab">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Photo Location Stamp</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f4f7fb; color: #111; font-size: 20px; line-height: 1.4;
+  }
+  header {
+    background: #0b5cab; color: #fff; padding: 16px 16px 14px; text-align: center;
+  }
+  header h1 { margin: 0; font-size: 28px; }
+  header p { margin: 4px 0 0; font-size: 18px; opacity: .95; }
+  #net {
+    display: inline-block; margin-top: 8px; padding: 4px 14px; border-radius: 999px;
+    font-size: 16px; font-weight: 700; background: #fff; color: #0a6b2c;
+  }
+  #net.off { color: #a15c00; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  .btn {
+    display: block; width: 100%; min-height: 72px; margin: 14px 0; padding: 14px 18px;
+    border: 0; border-radius: 16px; font-size: 24px; font-weight: 700; text-align: center;
+    color: #fff; cursor: pointer; font-family: inherit;
+  }
+  .btn small { display: block; font-size: 18px; font-weight: 500; opacity: .95; }
+  .btn:active { transform: scale(.98); }
+  .blue { background: #0b5cab; }
+  .green { background: #1a7f37; }
+  .orange { background: #b45309; }
+  .grey { background: #4b5563; }
+  input[type=file] { display: none; }
+  #status {
+    background: #fff; border: 3px solid #cfd8e3; border-radius: 14px; padding: 14px;
+    font-size: 21px; margin: 14px 0; min-height: 60px;
+  }
+  #status.ok { border-color: #1a7f37; }
+  #status.warn { border-color: #b45309; }
+  #status.err { border-color: #b91c1c; }
+  #preview { width: 100%; height: auto; border-radius: 12px; display: none; background: #ddd; }
+  .hidden { display: none !important; }
+  footer { text-align: center; color: #555; font-size: 16px; padding: 18px 16px 30px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📍 Photo Location Stamp</h1>
+  <p>फोटो पर जगह लिखें</p>
+  <span id="net">Online</span>
+</header>
+
+<main>
+  <label class="btn blue" for="file">
+    1. Choose Photo
+    <small>फोटो चुनें</small>
+  </label>
+  <input id="file" type="file" accept="image/jpeg,image/*">
+
+  <div id="status">Tap the blue button to start.<br>शुरू करने के लिए नीला बटन दबाएं।</div>
+
+  <canvas id="preview"></canvas>
+
+  <button id="gpsBtn" class="btn orange hidden">
+    Use my current location
+    <small>अभी की मेरी जगह लगाएं</small>
+  </button>
+
+  <button id="saveBtn" class="btn green hidden">
+    2. Save Photo
+    <small>फोटो सेव करें</small>
+  </button>
+
+  <button id="shareBtn" class="btn grey hidden">
+    Share / Save to Gallery
+    <small>शेयर करें / गैलरी में सेव करें</small>
+  </button>
+</main>
+
+<footer>No ads. Your photo never leaves your phone.<br>कोई विज्ञापन नहीं। आपकी फोटो फोन में ही रहती है।</footer>
+
+<script src="exif.js"></script>
+<script>
+(function () {
+  const $ = id => document.getElementById(id);
+  const fileInput = $('file'), statusEl = $('status'), canvas = $('preview');
+  const gpsBtn = $('gpsBtn'), saveBtn = $('saveBtn'), shareBtn = $('shareBtn'), net = $('net');
+  const ctx = canvas.getContext('2d');
+
+  let bitmap = null, fileName = 'photo', info = null, blob = null;
+
+  function setStatus(html, cls) {
+    statusEl.className = cls || '';
+    statusEl.innerHTML = html;
+  }
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function updateNet() {
+    net.textContent = navigator.onLine ? 'Online' : 'Offline (works fine)';
+    net.className = navigator.onLine ? '' : 'off';
+  }
+  addEventListener('online', updateNet);
+  addEventListener('offline', updateNet);
+  updateNet();
+
+  function fmtDate(exifDate) {
+    const m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2})/.exec(exifDate || '');
+    if (!m) return '';
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
+    return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
+  function fmtCoords(lat, lon) {
+    return Math.abs(lat).toFixed(6) + '° ' + (lat >= 0 ? 'N' : 'S') + ', ' +
+           Math.abs(lon).toFixed(6) + '° ' + (lon >= 0 ? 'E' : 'W');
+  }
+
+  async function placeName(lat, lon) {
+    if (!navigator.onLine) return '';
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 7000);
+    try {
+      const url = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=17&accept-language=en&lat=' +
+                  lat + '&lon=' + lon;
+      const r = await fetch(url, { signal: ctl.signal });
+      const j = await r.json();
+      return j.display_name || '';
+    } catch (e) {
+      return '';
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function wrap(text, maxW) {
+    const words = text.split(/\s+/), lines = [];
+    let cur = '';
+    for (const w of words) {
+      const test = cur ? cur + ' ' + w : w;
+      if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; }
+      else cur = test;
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
+  function draw() {
+    if (!bitmap) return;
+    const MAX = 3000;
+    const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+    const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+    canvas.width = w; canvas.height = h;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+
+    if (info && info.lat != null) {
+      const fs = Math.max(18, Math.round(w / 34));
+      const lh = Math.round(fs * 1.3), pad = Math.round(fs * 0.7);
+      ctx.font = '700 ' + fs + 'px system-ui, Arial, sans-serif';
+      const maxW = w - pad * 2;
+
+      let lines = [];
+      if (info.place) lines = lines.concat(wrap(info.place, maxW));
+      lines.push('Lat/Lon: ' + fmtCoords(info.lat, info.lon));
+      if (info.date) lines.push(info.date);
+
+      const barH = lines.length * lh + pad * 2;
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.fillRect(0, h - barH, w, barH);
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'top';
+      lines.forEach((t, i) => ctx.fillText(t, pad, h - barH + pad + i * lh));
+    }
+    canvas.style.display = 'block';
+  }
+
+  async function finish() {
+    setStatus('Adding location to photo…<br>फोटो पर जगह लिखी जा रही है…');
+    if (info.place === undefined) info.place = await placeName(info.lat, info.lon);
+    draw();
+    blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.92));
+    saveBtn.classList.remove('hidden');
+    if (navigator.canShare && blob) {
+      const f = new File([blob], outName(), { type: 'image/jpeg' });
+      if (navigator.canShare({ files: [f] })) shareBtn.classList.remove('hidden');
+    }
+    gpsBtn.classList.add('hidden');
+    let msg = '<b>Done! ✔</b> Location added to the photo.<br>हो गया! फोटो पर जगह लिख दी गई है।';
+    if (!info.place) {
+      msg += '<br><small>Place name needs internet; GPS numbers were added.<br>जगह का नाम इंटरनेट से आता है; अभी GPS नंबर लगाए हैं।</small>';
+    }
+    setStatus(msg, 'ok');
+    saveBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function outName() {
+    const base = fileName.replace(/\.[^.]+$/, '').slice(0, 40) || 'photo';
+    return base + '-location.jpg';
+  }
+
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    saveBtn.classList.add('hidden'); shareBtn.classList.add('hidden'); gpsBtn.classList.add('hidden');
+    canvas.style.display = 'none'; blob = null; info = null;
+    fileName = file.name || 'photo';
+    setStatus('Reading photo…<br>फोटो पढ़ रहे हैं…');
+    try {
+      const buf = await file.arrayBuffer();
+      const exif = readExif(buf);
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      info = { lat: exif.lat, lon: exif.lon, date: fmtDate(exif.date), place: undefined };
+      if (info.lat != null) {
+        await finish();
+      } else {
+        draw();
+        gpsBtn.classList.remove('hidden');
+        setStatus(
+          '<b>This photo has no location saved.</b><br>' +
+          'Some apps (like WhatsApp) remove it. If you are at the place where the photo was taken, tap the orange button.<br><br>' +
+          'इस फोटो में जगह नहीं मिली। अगर आप उसी जगह पर हैं तो नारंगी बटन दबाएं।', 'warn');
+      }
+    } catch (e) {
+      bitmap = null;
+      setStatus('<b>Sorry, this photo cannot be opened.</b><br>Please choose a normal JPG photo.<br>यह फोटो नहीं खुल सकी। कृपया दूसरी फोटो चुनें।', 'err');
+    }
+  });
+
+  gpsBtn.addEventListener('click', () => {
+    if (!navigator.geolocation) {
+      setStatus('Location is not available on this phone.<br>इस फोन में लोकेशन उपलब्ध नहीं है।', 'err');
+      return;
+    }
+    setStatus('Finding your location… please allow when asked.<br>जगह ढूंढ रहे हैं… पूछने पर "अनुमति दें" दबाएं।');
+    navigator.geolocation.getCurrentPosition(async pos => {
+      info.lat = pos.coords.latitude; info.lon = pos.coords.longitude;
+      info.place = undefined;
+      if (!info.date) info.date = new Date().toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+      await finish();
+    }, () => {
+      setStatus('Could not get location. Please switch on Location in phone settings and try again.<br>लोकेशन नहीं मिली। फोन की सेटिंग में लोकेशन चालू करें।', 'err');
+    }, { enableHighAccuracy: true, timeout: 20000 });
+  });
+
+  saveBtn.addEventListener('click', () => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = outName();
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    setStatus('<b>Saved ✔</b> Check your Downloads folder.<br>सेव हो गई। अपने Downloads फोल्डर में देखें।', 'ok');
+  });
+
+  shareBtn.addEventListener('click', async () => {
+    if (!blob) return;
+    try {
+      await navigator.share({ files: [new File([blob], outName(), { type: 'image/jpeg' })] });
+    } catch (e) { /* user cancelled */ }
+  });
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
