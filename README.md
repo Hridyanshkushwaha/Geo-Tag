@@ -22,7 +22,7 @@
 
 Most "GPS camera" and "geotag photo" apps are packed with ads, pop-ups and sign-ups. That is a real problem for **elderly and non-technical users**, who tap the wrong thing and get lost.
 
-This app was built for my mom. It does **one job**, with big buttons, big text, and Hindi + English labels:
+This app was built for my elders. It does **one job**, with big buttons, big text, and Hindi + English labels:
 
 > Take or choose a photo → the location is written on it → save it.
 
