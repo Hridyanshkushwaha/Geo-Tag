@@ -147,7 +147,7 @@ Ideas and pull requests are welcome, especially **translations** and **accessibi
 
 ## License
 
-MIT. Free to use, change and share. Add a `LICENSE` file (GitHub: *Add file → Create new file → LICENSE → Choose a license template*).
+MIT. Free to use, change and share.
 
 ---
 
